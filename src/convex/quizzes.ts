@@ -1,7 +1,9 @@
-import { getAuthUserId } from "@convex-dev/auth/server";
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
+import { requireProfile, requireCourseAccess, getProfile } from "./helpers";
 
+// ─── CREATE QUIZ ──────────────────────────────────────────────
+// Instructor or org_admin only
 export const createQuiz = mutation({
   args: {
     lessonId: v.id("lessons"),
@@ -12,7 +14,9 @@ export const createQuiz = mutation({
     timeLimit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const quizId = await ctx.db.insert("quizzes", {
+    await requireCourseAccess(ctx, args.courseId);
+
+    return await ctx.db.insert("quizzes", {
       lessonId: args.lessonId,
       courseId: args.courseId,
       title: args.title,
@@ -21,10 +25,11 @@ export const createQuiz = mutation({
       timeLimit: args.timeLimit,
       createdAt: Date.now(),
     });
-    return quizId;
   },
 });
 
+// ─── ADD QUESTION ─────────────────────────────────────────────
+// Instructor or org_admin only
 export const addQuestion = mutation({
   args: {
     quizId: v.id("quizzes"),
@@ -33,6 +38,10 @@ export const addQuestion = mutation({
     correctAnswer: v.number(),
   },
   handler: async (ctx, args) => {
+    const quiz = await ctx.db.get(args.quizId);
+    if (!quiz) throw new Error("Quiz not found");
+    await requireCourseAccess(ctx, quiz.courseId);
+
     const existing = await ctx.db
       .query("questions")
       .withIndex("by_quizId", (q) => q.eq("quizId", args.quizId))
@@ -49,41 +58,8 @@ export const addQuestion = mutation({
   },
 });
 
-export const getQuiz = query({
-  args: { quizId: v.id("quizzes") },
-  handler: async (ctx, args) => {
-    const quiz = await ctx.db.get(args.quizId);
-    if (!quiz) return null;
-
-    const questions = await ctx.db
-      .query("questions")
-      .withIndex("by_quizId", (q) => q.eq("quizId", args.quizId))
-      .collect();
-
-    return { ...quiz, questions: questions.sort((a, b) => a.order - b.order) };
-  },
-});
-
-export const getQuizByLesson = query({
-  args: { lessonId: v.id("lessons") },
-  handler: async (ctx, args) => {
-    const quizzes = await ctx.db
-      .query("quizzes")
-      .withIndex("by_lessonId", (q) => q.eq("lessonId", args.lessonId))
-      .collect();
-
-    if (quizzes.length === 0) return null;
-
-    const quiz = quizzes[0];
-    const questions = await ctx.db
-      .query("questions")
-      .withIndex("by_quizId", (q) => q.eq("quizId", quiz._id))
-      .collect();
-
-    return { ...quiz, questions: questions.sort((a, b) => a.order - b.order) };
-  },
-});
-
+// ─── SUBMIT QUIZ ──────────────────────────────────────────────
+// Only enrolled learners can submit; must own the enrollment
 export const submitQuiz = mutation({
   args: {
     quizId: v.id("quizzes"),
@@ -96,14 +72,15 @@ export const submitQuiz = mutation({
     ),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const profile = await requireProfile(ctx);
 
-    const profile = await ctx.db
-      .query("appUsers")
-      .withIndex("by_userId", (q) => q.eq("userId", userId))
-      .unique();
-    if (!profile) throw new Error("Profile not found");
+    const enrollment = await ctx.db.get(args.enrollmentId);
+    if (!enrollment) throw new Error("Enrollment not found");
+
+    // Ownership check: only the learner can submit their own quiz
+    if (enrollment.userId !== profile._id) {
+      throw new Error("You can only take quizzes for your own enrollment");
+    }
 
     const quiz = await ctx.db.get(args.quizId);
     if (!quiz) throw new Error("Quiz not found");
@@ -122,9 +99,10 @@ export const submitQuiz = mutation({
       }
     }
 
-    const score = questions.length > 0
-      ? Math.round((correct / questions.length) * 100)
-      : 0;
+    const score =
+      questions.length > 0
+        ? Math.round((correct / questions.length) * 100)
+        : 0;
     const passed = score >= quiz.passingScore;
 
     const attemptId = await ctx.db.insert("quizAttempts", {
@@ -138,7 +116,7 @@ export const submitQuiz = mutation({
       completedAt: Date.now(),
     });
 
-    // Notify instructor
+    // Notify learner
     await ctx.db.insert("notifications", {
       userId: profile._id,
       title: passed ? "Quiz Passed!" : "Quiz Result",
@@ -178,7 +156,56 @@ export const submitQuiz = mutation({
       }
     }
 
-    return { attemptId, score, passed, totalQuestions: questions.length, correctAnswers: correct };
+    return {
+      attemptId,
+      score,
+      passed,
+      totalQuestions: questions.length,
+      correctAnswers: correct,
+    };
+  },
+});
+
+// ─── QUERIES ──────────────────────────────────────────────────
+
+export const getQuiz = query({
+  args: { quizId: v.id("quizzes") },
+  handler: async (ctx, args) => {
+    const quiz = await ctx.db.get(args.quizId);
+    if (!quiz) return null;
+
+    const questions = await ctx.db
+      .query("questions")
+      .withIndex("by_quizId", (q) => q.eq("quizId", args.quizId))
+      .collect();
+
+    return {
+      ...quiz,
+      questions: questions.sort((a, b) => a.order - b.order),
+    };
+  },
+});
+
+export const getQuizByLesson = query({
+  args: { lessonId: v.id("lessons") },
+  handler: async (ctx, args) => {
+    const quizzes = await ctx.db
+      .query("quizzes")
+      .withIndex("by_lessonId", (q) => q.eq("lessonId", args.lessonId))
+      .collect();
+
+    if (quizzes.length === 0) return null;
+
+    const quiz = quizzes[0];
+    const questions = await ctx.db
+      .query("questions")
+      .withIndex("by_quizId", (q) => q.eq("quizId", quiz._id))
+      .collect();
+
+    return {
+      ...quiz,
+      questions: questions.sort((a, b) => a.order - b.order),
+    };
   },
 });
 
@@ -195,20 +222,15 @@ export const getQuizAttempts = query({
 export const getUserQuizAttempts = query({
   args: { quizId: v.id("quizzes") },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return [];
-
-    const profile = await ctx.db
-      .query("appUsers")
-      .withIndex("by_userId", (q) => q.eq("userId", userId))
-      .unique();
+    const profile = await getProfile(ctx);
     if (!profile) return [];
 
-    return await ctx.db
+    const attempts = await ctx.db
       .query("quizAttempts")
       .withIndex("by_quizId", (q) => q.eq("quizId", args.quizId))
-      .collect()
-      .then((attempts) => attempts.filter((a) => a.userId === profile._id));
+      .collect();
+
+    return attempts.filter((a) => a.userId === profile._id);
   },
 });
 

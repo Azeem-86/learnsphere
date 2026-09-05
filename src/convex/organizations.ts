@@ -1,7 +1,14 @@
-import { getAuthUserId } from "@convex-dev/auth/server";
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
+import {
+  requireProfile,
+  requireOrgAdmin,
+  requireOrgMember,
+  getProfile,
+} from "./helpers";
 
+// ─── CREATE ORG ───────────────────────────────────────────────
+// Only super_admin or any authenticated user (first org = becomes org_admin)
 export const createOrganization = mutation({
   args: {
     name: v.string(),
@@ -10,16 +17,13 @@ export const createOrganization = mutation({
     website: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const profile = await requireProfile(ctx);
 
-    const profile = await ctx.db
-      .query("appUsers")
-      .withIndex("by_userId", (q) => q.eq("userId", userId))
-      .unique();
-    if (!profile) throw new Error("Profile not found");
+    // Only super_admin can create orgs (learners/instructors join existing ones)
+    if (profile.role !== "super_admin" && profile.role !== "org_admin") {
+      throw new Error("Only administrators can create organizations");
+    }
 
-    // Check slug uniqueness
     const existing = await ctx.db
       .query("organizations")
       .withIndex("by_slug", (q) => q.eq("slug", args.slug))
@@ -45,13 +49,13 @@ export const createOrganization = mutation({
       joinedAt: Date.now(),
     });
 
-    // Update user profile
     await ctx.db.patch(profile._id, { selectedOrgId: orgId });
-
     return orgId;
   },
 });
 
+// ─── UPDATE ORG ───────────────────────────────────────────────
+// Only org_admin or super_admin of the org
 export const updateOrganization = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -60,14 +64,7 @@ export const updateOrganization = mutation({
     website: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
-
-    const profile = await ctx.db
-      .query("appUsers")
-      .withIndex("by_userId", (q) => q.eq("userId", userId))
-      .unique();
-    if (!profile) throw new Error("Profile not found");
+    await requireOrgAdmin(ctx, args.orgId);
 
     const updates: Record<string, unknown> = {};
     if (args.name !== undefined) updates.name = args.name;
@@ -78,6 +75,8 @@ export const updateOrganization = mutation({
     return args.orgId;
   },
 });
+
+// ─── QUERIES ──────────────────────────────────────────────────
 
 export const getAllOrganizations = query({
   args: {},
@@ -96,13 +95,7 @@ export const getOrganization = query({
 export const getUserOrganizations = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return [];
-
-    const profile = await ctx.db
-      .query("appUsers")
-      .withIndex("by_userId", (q) => q.eq("userId", userId))
-      .unique();
+    const profile = await getProfile(ctx);
     if (!profile) return [];
 
     const memberships = await ctx.db
@@ -139,18 +132,24 @@ export const getOrgStats = query({
       .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
       .collect();
 
-    const certificates = await ctx.db
-      .query("certificates")
-      .withIndex("by_userId", (q) => q.eq("userId", members[0]?.userId ?? ("fake" as any)))
-      .collect();
+    // Count certificates for this org
+    let totalCertificates = 0;
+    for (const m of members) {
+      const certs = await ctx.db
+        .query("certificates")
+        .withIndex("by_userId", (q) => q.eq("userId", m.userId))
+        .collect();
+      totalCertificates += certs.length;
+    }
 
     const instructors = members.filter((m) => m.role === "instructor").length;
     const learners = members.filter((m) => m.role === "learner").length;
     const publishedCourses = courses.filter((c) => c.isPublished).length;
     const completedEnrollments = enrollments.filter((e) => e.isCompleted).length;
-    const completionRate = enrollments.length > 0
-      ? Math.round((completedEnrollments / enrollments.length) * 100)
-      : 0;
+    const completionRate =
+      enrollments.length > 0
+        ? Math.round((completedEnrollments / enrollments.length) * 100)
+        : 0;
 
     return {
       totalMembers: members.length,
@@ -161,6 +160,7 @@ export const getOrgStats = query({
       totalEnrollments: enrollments.length,
       completedEnrollments,
       completionRate,
+      totalCertificates,
     };
   },
 });

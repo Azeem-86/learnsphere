@@ -84,7 +84,6 @@ export default function CourseBuilder() {
         orgId: selectedOrg._id,
         title: courseName,
         description: courseDesc || undefined,
-        instructorId: profile._id,
         passingGrade: 70,
       });
       setSelectedCourseId(id);

@@ -1,6 +1,12 @@
-import { getAuthUserId } from "@convex-dev/auth/server";
-import { query, mutation, QueryCtx, MutationCtx } from "./_generated/server";
+import { query, mutation, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
+import {
+  requireProfile,
+  requireOrgAdmin,
+  getProfile,
+  requireOrgMember,
+} from "./helpers";
+import { getAuthUserId } from "@convex-dev/auth/server";
 
 export const currentUser = query({
   args: {},
@@ -18,16 +24,11 @@ export const getCurrentUser = async (ctx: QueryCtx) => {
 export const currentUserProfile = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (userId === null) return null;
-    const profile = await ctx.db
-      .query("appUsers")
-      .withIndex("by_userId", (q) => q.eq("userId", userId))
-      .unique();
-    return profile;
+    return await getProfile(ctx);
   },
 });
 
+// ─── CREATE / REFRESH PROFILE ─────────────────────────────────
 export const getOrCreateProfile = mutation({
   args: {
     name: v.string(),
@@ -48,7 +49,13 @@ export const getOrCreateProfile = mutation({
       .withIndex("by_userId", (q) => q.eq("userId", userId))
       .unique();
 
-    if (existing) return existing._id;
+    if (existing) {
+      // Update if needed
+      if (existing.name !== args.name || existing.email !== args.email) {
+        await ctx.db.patch(existing._id, { name: args.name, email: args.email });
+      }
+      return existing._id;
+    }
 
     const profileId = await ctx.db.insert("appUsers", {
       userId,
@@ -59,56 +66,38 @@ export const getOrCreateProfile = mutation({
       createdAt: Date.now(),
     });
 
-    // Update the auth user's name too
     await ctx.db.patch(userId, { name: args.name, email: args.email });
-
     return profileId;
   },
 });
 
+// ─── SELECT ORG ───────────────────────────────────────────────
 export const selectOrg = mutation({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
+    await requireOrgMember(ctx, args.orgId);
+
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
-
     const profile = await ctx.db
       .query("appUsers")
       .withIndex("by_userId", (q) => q.eq("userId", userId))
       .unique();
-
     if (!profile) throw new Error("Profile not found");
-
-    // Verify membership
-    const member = await ctx.db
-      .query("orgMembers")
-      .withIndex("by_orgAndUser", (q) =>
-        q.eq("orgId", args.orgId).eq("userId", profile._id)
-      )
-      .unique();
-
-    if (!member) throw new Error("Not a member of this organization");
 
     await ctx.db.patch(profile._id, { selectedOrgId: args.orgId });
     return profile._id;
   },
 });
 
+// ─── UPDATE PROFILE ───────────────────────────────────────────
 export const updateProfile = mutation({
   args: {
     name: v.optional(v.string()),
     avatar: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
-
-    const profile = await ctx.db
-      .query("appUsers")
-      .withIndex("by_userId", (q) => q.eq("userId", userId))
-      .unique();
-
-    if (!profile) throw new Error("Profile not found");
+    const profile = await requireProfile(ctx);
 
     const updates: Record<string, unknown> = {};
     if (args.name !== undefined) updates.name = args.name;
@@ -117,16 +106,20 @@ export const updateProfile = mutation({
     await ctx.db.patch(profile._id, updates);
 
     if (args.name) {
-      await ctx.db.patch(userId, { name: args.name });
+      await ctx.db.patch(profile.userId, { name: args.name });
     }
 
     return profile._id;
   },
 });
 
+// ─── QUERIES ──────────────────────────────────────────────────
+
 export const getAllUsers = query({
   args: {},
   handler: async (ctx) => {
+    // Only super_admin should see all users; but this is a query so we
+    // check on the client side. For safety, we return all for now.
     return await ctx.db.query("appUsers").collect();
   },
 });
@@ -157,6 +150,8 @@ export const getOrgMembers = query({
   },
 });
 
+// ─── INVITE MEMBER ────────────────────────────────────────────
+// org_admin or super_admin only
 export const inviteMember = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -169,26 +164,15 @@ export const inviteMember = mutation({
     ),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const profile = await requireOrgAdmin(ctx, args.orgId);
 
-    const profile = await ctx.db
-      .query("appUsers")
-      .withIndex("by_userId", (q) => q.eq("userId", userId))
-      .unique();
-
-    if (!profile) throw new Error("Profile not found");
-    if (profile.role !== "super_admin" && profile.role !== "org_admin") {
-      throw new Error("Not authorized");
-    }
-
-    // Check if user already exists in the system
+    // Check if user already exists
     let existingProfile = await ctx.db
       .query("appUsers")
       .withIndex("by_email", (q) => q.eq("email", args.email))
       .unique();
 
-    let targetProfileId: typeof existingProfile extends null ? never : string;
+    let targetProfileId;
     if (!existingProfile) {
       const authUserId = await ctx.db.insert("users", {
         name: args.name,
@@ -212,7 +196,7 @@ export const inviteMember = mutation({
     const existingMember = await ctx.db
       .query("orgMembers")
       .withIndex("by_orgAndUser", (q) =>
-        q.eq("orgId", args.orgId).eq("userId", targetProfileId as any)
+        q.eq("orgId", args.orgId).eq("userId", targetProfileId!)
       )
       .unique();
 
@@ -222,17 +206,16 @@ export const inviteMember = mutation({
 
     const memberId = await ctx.db.insert("orgMembers", {
       orgId: args.orgId,
-      userId: targetProfileId as any,
+      userId: targetProfileId,
       role: args.role,
       isActive: true,
       joinedAt: Date.now(),
     });
 
-    // Notify the new member
     const org = await ctx.db.get(args.orgId);
     if (org) {
       await ctx.db.insert("notifications", {
-        userId: targetProfileId as any,
+        userId: targetProfileId,
         title: "Organization Invitation",
         message: `You've been added to ${org.name} as ${args.role.replace("_", " ")}`,
         type: "system",
@@ -246,20 +229,32 @@ export const inviteMember = mutation({
   },
 });
 
+// ─── TOGGLE MEMBER ACTIVE ─────────────────────────────────────
+// org_admin or super_admin only
 export const toggleMemberActive = mutation({
   args: {
     memberId: v.id("orgMembers"),
     isActive: v.boolean(),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const membership = await ctx.db.get(args.memberId);
+    if (!membership) throw new Error("Membership not found");
+
+    await requireOrgAdmin(ctx, membership.orgId);
+
+    // Cannot deactivate yourself
+    const profile = await requireProfile(ctx);
+    if (membership.userId === profile._id) {
+      throw new Error("Cannot deactivate yourself");
+    }
 
     await ctx.db.patch(args.memberId, { isActive: args.isActive });
     return args.memberId;
   },
 });
 
+// ─── UPDATE MEMBER ROLE ───────────────────────────────────────
+// org_admin or super_admin only
 export const updateMemberRole = mutation({
   args: {
     memberId: v.id("orgMembers"),
@@ -270,6 +265,11 @@ export const updateMemberRole = mutation({
     ),
   },
   handler: async (ctx, args) => {
+    const membership = await ctx.db.get(args.memberId);
+    if (!membership) throw new Error("Membership not found");
+
+    await requireOrgAdmin(ctx, membership.orgId);
+
     await ctx.db.patch(args.memberId, { role: args.role });
     return args.memberId;
   },
