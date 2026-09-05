@@ -16,6 +16,7 @@ import {
   Search,
 } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 
 export default function Courses() {
   const { profile, selectedOrg } = useApp();
@@ -45,8 +46,9 @@ export default function Courses() {
   const handleEnroll = async (courseId: string) => {
     try {
       await enroll({ courseId: courseId as any });
+      toast.success("Enrolled successfully!");
     } catch (err: any) {
-      alert(err.message);
+      toast.error(err.message || "Failed to enroll");
     }
   };
 

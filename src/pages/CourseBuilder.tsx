@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useState } from "react";
+import { toast } from "sonner";
 import {
   Dialog,
   DialogContent,
@@ -77,21 +78,33 @@ export default function CourseBuilder() {
 
   const handleCreateCourse = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedOrg || !profile) return;
+    if (!selectedOrg) {
+      toast.error("No organization selected. Please select an organization first.");
+      return;
+    }
+    if (!profile) {
+      toast.error("Profile not loaded. Please wait or refresh.");
+      return;
+    }
+    if (!courseName.trim()) {
+      toast.error("Course title is required.");
+      return;
+    }
     setSaving(true);
     try {
       const id = await createCourse({
         orgId: selectedOrg._id,
-        title: courseName,
-        description: courseDesc || undefined,
+        title: courseName.trim(),
+        description: courseDesc?.trim() || undefined,
         passingGrade: 70,
       });
+      toast.success("Course created!");
       setSelectedCourseId(id);
       setShowNewCourse(false);
       setCourseName("");
       setCourseDesc("");
     } catch (err: any) {
-      alert(err.message);
+      toast.error(err.message || "Failed to create course");
     } finally {
       setSaving(false);
     }
@@ -99,15 +112,23 @@ export default function CourseBuilder() {
 
   const handleAddModule = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedCourseId) return;
+    if (!selectedCourseId) {
+      toast.error("No course selected.");
+      return;
+    }
+    if (!moduleName.trim()) {
+      toast.error("Module title is required.");
+      return;
+    }
     setSaving(true);
     try {
-      const id = await createModule({ courseId: selectedCourseId as any, title: moduleName });
+      const id = await createModule({ courseId: selectedCourseId as any, title: moduleName.trim() });
+      toast.success("Module added!");
       setSelectedModuleId(id);
       setShowNewModule(false);
       setModuleName("");
     } catch (err: any) {
-      alert(err.message);
+      toast.error(err.message || "Failed to add module");
     } finally {
       setSaving(false);
     }
@@ -115,23 +136,31 @@ export default function CourseBuilder() {
 
   const handleAddLesson = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedCourseId || !selectedModuleId) return;
+    if (!selectedCourseId || !selectedModuleId) {
+      toast.error("Select a course and module first.");
+      return;
+    }
+    if (!lessonTitle.trim()) {
+      toast.error("Lesson title is required.");
+      return;
+    }
     setSaving(true);
     try {
       await createLesson({
         moduleId: selectedModuleId as any,
         courseId: selectedCourseId as any,
-        title: lessonTitle,
+        title: lessonTitle.trim(),
         type: lessonType as any,
         content: lessonContent || undefined,
         videoUrl: lessonVideoUrl || undefined,
       });
+      toast.success("Lesson added!");
       setShowNewLesson(false);
       setLessonTitle("");
       setLessonContent("");
       setLessonVideoUrl("");
     } catch (err: any) {
-      alert(err.message);
+      toast.error(err.message || "Failed to add lesson");
     } finally {
       setSaving(false);
     }
@@ -139,28 +168,33 @@ export default function CourseBuilder() {
 
   const handleAddQuiz = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedCourseId || !selectedModuleId) return;
+    if (!selectedCourseId || !selectedModuleId) {
+      toast.error("Select a course and module first.");
+      return;
+    }
+    if (!quizTitle.trim()) {
+      toast.error("Quiz title is required.");
+      return;
+    }
     setSaving(true);
     try {
-      // Create a quiz lesson first
       const lessonId = await createLesson({
         moduleId: selectedModuleId as any,
         courseId: selectedCourseId as any,
-        title: quizTitle,
+        title: quizTitle.trim(),
         type: "quiz",
         passingScore: quizPassing,
       });
 
-      // Create the quiz
       const quizId = await createQuiz({
         lessonId: lessonId as any,
         courseId: selectedCourseId as any,
-        title: quizTitle,
+        title: quizTitle.trim(),
         description: `Quiz: ${quizTitle}`,
         passingScore: quizPassing,
       });
 
-      // Add questions
+      let addedCount = 0;
       for (const q of questions) {
         if (q.text && q.options.every((o) => o)) {
           await addQuestion({
@@ -169,14 +203,16 @@ export default function CourseBuilder() {
             options: q.options,
             correctAnswer: q.correctAnswer,
           });
+          addedCount++;
         }
       }
 
+      toast.success(`Quiz created with ${addedCount} question(s)!`);
       setShowNewQuiz(false);
       setQuizTitle("");
       setQuestions([{ text: "", options: ["", "", "", ""], correctAnswer: 0 }]);
     } catch (err: any) {
-      alert(err.message);
+      toast.error(err.message || "Failed to create quiz");
     } finally {
       setSaving(false);
     }
@@ -184,29 +220,37 @@ export default function CourseBuilder() {
 
   const handleAddAssignment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedCourseId || !selectedModuleId) return;
+    if (!selectedCourseId || !selectedModuleId) {
+      toast.error("Select a course and module first.");
+      return;
+    }
+    if (!assignmentTitle.trim()) {
+      toast.error("Assignment title is required.");
+      return;
+    }
     setSaving(true);
     try {
       const lessonId = await createLesson({
         moduleId: selectedModuleId as any,
         courseId: selectedCourseId as any,
-        title: assignmentTitle,
+        title: assignmentTitle.trim(),
         type: "assignment",
       });
 
       await createAssignment({
         lessonId: lessonId as any,
         courseId: selectedCourseId as any,
-        title: assignmentTitle,
+        title: assignmentTitle.trim(),
         description: assignmentDesc || undefined,
         maxScore: assignmentMaxScore,
       });
 
+      toast.success("Assignment created!");
       setShowNewAssignment(false);
       setAssignmentTitle("");
       setAssignmentDesc("");
     } catch (err: any) {
-      alert(err.message);
+      toast.error(err.message || "Failed to create assignment");
     } finally {
       setSaving(false);
     }
@@ -215,8 +259,9 @@ export default function CourseBuilder() {
   const handleTogglePublish = async (courseId: string, current: boolean) => {
     try {
       await publishCourse({ courseId: courseId as any, isPublished: !current });
+      toast.success(current ? "Course unpublished" : "Course published!");
     } catch (err: any) {
-      alert(err.message);
+      toast.error(err.message || "Failed to update publish status");
     }
   };
 

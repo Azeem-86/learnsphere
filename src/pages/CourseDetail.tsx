@@ -7,6 +7,7 @@ import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useParams, Link, useNavigate } from "react-router";
 import { useState } from "react";
+import { toast } from "sonner";
 import {
   BookOpen,
   Users,
@@ -77,7 +78,7 @@ export default function CourseDetail() {
     try {
       await enroll({ courseId: courseId as any });
     } catch (err: any) {
-      alert(err.message);
+      toast.error(err.message || "Failed to enroll");
     }
   };
 

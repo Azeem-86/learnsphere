@@ -87,15 +87,14 @@ export async function requireOrgAdmin(
   return profile;
 }
 
-/** Require instructor or org_admin or super_admin for the given org. */
+/** Require instructor or org_admin for the given org. super_admin is NOT allowed. */
 export async function requireInstructorOrAdmin(
   ctx: MutationCtx,
   orgId: Id<"organizations">
 ): Promise<AppUser> {
   const profile = await requireProfile(ctx);
-  if (profile.role === "super_admin") return profile;
   if (profile.role !== "instructor" && profile.role !== "org_admin") {
-    throw new Error("Instructor or admin role required");
+    throw new Error("Instructor or organization admin role required");
   }
 
   const member = await ctx.db
@@ -119,7 +118,14 @@ export async function requireCourseAccess(
   if (!course) throw new Error("Course not found");
 
   const profile = await requireProfile(ctx);
-  if (profile.role === "super_admin") return { course, profile };
+
+  // Learners and super_admins cannot modify courses
+  if (profile.role === "learner") {
+    throw new Error("Learners cannot modify courses");
+  }
+  if (profile.role === "super_admin") {
+    throw new Error("Super admins cannot modify courses directly");
+  }
 
   const member = await ctx.db
     .query("orgMembers")
@@ -135,8 +141,8 @@ export async function requireCourseAccess(
     throw new Error("Instructors can only manage their own courses");
   }
 
-  if (profile.role === "learner") {
-    throw new Error("Learners cannot modify courses");
+  if (profile.role !== "instructor" && profile.role !== "org_admin") {
+    throw new Error("Insufficient permissions to manage courses");
   }
 
   return { course, profile, member };

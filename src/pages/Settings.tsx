@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useState } from "react";
+import { toast } from "sonner";
 import { User, Mail, Shield, Save, Building2 } from "lucide-react";
 
 export default function Settings() {
@@ -22,7 +23,7 @@ export default function Settings() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (err: any) {
-      alert(err.message);
+      toast.error(err.message || "Failed to save profile");
     } finally {
       setSaving(false);
     }

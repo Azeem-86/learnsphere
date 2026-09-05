@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useState } from "react";
+import { toast } from "sonner";
 import {
   Dialog,
   DialogContent,
@@ -74,7 +75,7 @@ export default function Members() {
       setInviteEmail("");
       setInviteRole("learner");
     } catch (err: any) {
-      alert(err.message);
+      toast.error(err.message || "Failed to invite member");
     } finally {
       setSaving(false);
     }

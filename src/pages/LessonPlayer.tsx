@@ -7,6 +7,7 @@ import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useParams, useNavigate, Link } from "react-router";
 import { useState } from "react";
+import { toast } from "sonner";
 import {
   ArrowLeft,
   ArrowRight,
@@ -71,11 +72,10 @@ export default function LessonPlayer() {
     if (!enrollment || !lessonId) return;
     try {
       await completeLesson({ enrollmentId: enrollment._id, lessonId: lessonId as any });
-      // Check if course is complete
       await checkCourseComplete({ enrollmentId: enrollment._id });
       navigate(`/dashboard/course/${lessonData.courseId}`);
     } catch (err: any) {
-      alert(err.message);
+      toast.error(err.message || "Failed to complete lesson");
     }
   };
 
@@ -94,7 +94,7 @@ export default function LessonPlayer() {
       });
       setQuizResult(result);
     } catch (err: any) {
-      alert(err.message);
+      toast.error(err.message || "Failed to submit quiz");
     } finally {
       setSubmitting(false);
     }
@@ -111,7 +111,7 @@ export default function LessonPlayer() {
       });
       navigate(`/dashboard/course/${lessonData.courseId}`);
     } catch (err: any) {
-      alert(err.message);
+      toast.error(err.message || "Failed to submit assignment");
     } finally {
       setSubmitting(false);
     }
