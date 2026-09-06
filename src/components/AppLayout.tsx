@@ -29,7 +29,6 @@ import {
   GraduationCap,
   Award,
   FileText,
-  Trophy,
   Settings,
   LogOut,
   Bell,
@@ -38,9 +37,9 @@ import {
   BarChart3,
   PenTool,
   CheckCircle2,
-  UserPlus,
   Search,
-  Home,
+  Send,
+  ClipboardCheck,
 } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router";
 import { useState, type ReactNode } from "react";
@@ -54,14 +53,17 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { label: "Dashboard", icon: <LayoutDashboard size={20} />, href: "/dashboard" },
-  { label: "Organizations", icon: <Building2 size={20} />, href: "/dashboard/organizations", roles: ["super_admin", "org_admin"] },
+  { label: "Organizations", icon: <Building2 size={20} />, href: "/dashboard/organizations", roles: ["super_admin"] },
+  { label: "Manage Org", icon: <Building2 size={20} />, href: "/dashboard/organizations", roles: ["org_admin"] },
   { label: "Members", icon: <Users size={20} />, href: "/dashboard/members", roles: ["super_admin", "org_admin"] },
-  { label: "Courses", icon: <BookOpen size={20} />, href: "/dashboard/courses" },
+  { label: "Browse Courses", icon: <BookOpen size={20} />, href: "/dashboard/courses", roles: ["learner", "super_admin"] },
   { label: "My Courses", icon: <GraduationCap size={20} />, href: "/dashboard/my-courses", roles: ["learner"] },
+  { label: "My Courses", icon: <BookOpen size={20} />, href: "/dashboard/my-courses", roles: ["instructor"] },
   { label: "Course Builder", icon: <PenTool size={20} />, href: "/dashboard/course-builder", roles: ["instructor", "org_admin"] },
-  { label: "Assignments", icon: <FileText size={20} />, href: "/dashboard/assignments" },
+  { label: "Assignments", icon: <FileText size={20} />, href: "/dashboard/assignments", roles: ["instructor", "org_admin"] },
+  { label: "Assignments", icon: <FileText size={20} />, href: "/dashboard/assignments", roles: ["learner"] },
   { label: "Grades", icon: <BarChart3 size={20} />, href: "/dashboard/grades", roles: ["learner"] },
-  { label: "Certificates", icon: <Award size={20} />, href: "/dashboard/certificates" },
+  { label: "Certificates", icon: <Award size={20} />, href: "/dashboard/certificates", roles: ["learner"] },
   { label: "Settings", icon: <Settings size={20} />, href: "/dashboard/settings" },
 ];
 
@@ -76,7 +78,6 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
 
   return (
     <div className="flex h-full flex-col">
-      {/* Logo */}
       <div className="flex items-center gap-3 px-5 py-5">
         <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary clay-sm">
           <GraduationCap className="h-5 w-5 text-white" />
@@ -88,8 +89,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
         </div>
       </div>
 
-      {/* Org indicator */}
-      {selectedOrg && (
+      {selectedOrg && role !== "super_admin" && (
         <div className="mx-4 mb-3">
           <div className="clay-inset px-3 py-2.5">
             <p className="text-xs font-medium text-muted-foreground">Organization</p>
@@ -100,7 +100,6 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
 
       <Separator className="mx-4 opacity-50" />
 
-      {/* Navigation */}
       <ScrollArea className="flex-1 px-3 py-3">
         <nav className="space-y-1">
           {filteredItems.map((item) => {
@@ -111,7 +110,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
 
             return (
               <Link
-                key={item.href}
+                key={item.href + (item.roles?.join(",") ?? "")}
                 to={item.href}
                 onClick={onNavigate}
                 className={cn(
@@ -131,7 +130,6 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
         </nav>
       </ScrollArea>
 
-      {/* User card at bottom */}
       <div className="border-t border-border/50 p-4">
         <div className="clay-inset flex items-center gap-3 px-3 py-2.5">
           <Avatar className="clay-avatar h-9 w-9">
@@ -167,33 +165,22 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
-      {/* Desktop Sidebar */}
       <aside className="clay-sidebar hidden lg:flex w-64 flex-col flex-shrink-0">
         <SidebarContent />
       </aside>
 
-      {/* Mobile Sidebar */}
       <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
         <SheetContent side="left" className="w-72 p-0 clay-sidebar border-r-0">
           <SidebarContent onNavigate={() => setMobileOpen(false)} />
         </SheetContent>
       </Sheet>
 
-      {/* Main Content */}
       <div className="flex flex-1 flex-col overflow-hidden">
-        {/* Top Nav */}
         <header className="clay-flat flex h-16 items-center justify-between border-b border-border/50 px-4 lg:px-6">
           <div className="flex items-center gap-3">
-            <Sheet>
-              <SheetTrigger asChild>
-                <Button variant="ghost" size="icon" className="lg:hidden">
-                  <Menu className="h-5 w-5" />
-                </Button>
-              </SheetTrigger>
-              <SheetContent side="left" className="w-72 p-0 clay-sidebar border-r-0">
-                <SidebarContent onNavigate={() => setMobileOpen(false)} />
-              </SheetContent>
-            </Sheet>
+            <Button variant="ghost" size="icon" className="lg:hidden" onClick={() => setMobileOpen(true)}>
+              <Menu className="h-5 w-5" />
+            </Button>
             <div className="hidden sm:flex items-center clay-inset px-3 py-1.5">
               <Search className="h-4 w-4 text-muted-foreground mr-2" />
               <input
@@ -205,7 +192,6 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Notifications */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon" className="relative clay-sm rounded-2xl">
@@ -221,12 +207,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
                 <DropdownMenuLabel className="flex items-center justify-between">
                   <span>Notifications</span>
                   {(unreadCount ?? 0) > 0 && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-xs h-7"
-                      onClick={() => markAllRead()}
-                    >
+                    <Button variant="ghost" size="sm" className="text-xs h-7" onClick={() => markAllRead()}>
                       Mark all read
                     </Button>
                   )}
@@ -234,9 +215,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
                 <DropdownMenuSeparator />
                 <ScrollArea className="max-h-72">
                   {notifications?.length === 0 && (
-                    <p className="p-4 text-sm text-muted-foreground text-center">
-                      No notifications yet
-                    </p>
+                    <p className="p-4 text-sm text-muted-foreground text-center">No notifications yet</p>
                   )}
                   {notifications?.slice(0, 10).map((n: any) => (
                     <DropdownMenuItem key={n._id} className="flex flex-col items-start gap-1 py-3 cursor-default">
@@ -253,7 +232,6 @@ export default function AppLayout({ children }: { children: ReactNode }) {
               </DropdownMenuContent>
             </DropdownMenu>
 
-            {/* User Menu */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" className="gap-2 clay-sm rounded-2xl px-3">
@@ -286,7 +264,6 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           </div>
         </header>
 
-        {/* Page Content */}
         <main className="flex-1 overflow-auto p-4 lg:p-6">
           {children}
         </main>

@@ -3,12 +3,12 @@ import { v } from "convex/values";
 import {
   requireProfile,
   requireOrgAdmin,
-  requireOrgMember,
+  requireSuperAdmin,
   getProfile,
 } from "./helpers";
 
-// ─── CREATE ORG ───────────────────────────────────────────────
-// Only super_admin or any authenticated user (first org = becomes org_admin)
+// ─── CREATE ORG (request approval) ────────────────────────────
+// org_admin creates → status = "pending" → super_admin approves
 export const createOrganization = mutation({
   args: {
     name: v.string(),
@@ -19,9 +19,8 @@ export const createOrganization = mutation({
   handler: async (ctx, args) => {
     const profile = await requireProfile(ctx);
 
-    // Only super_admin can create orgs (learners/instructors join existing ones)
-    if (profile.role !== "super_admin" && profile.role !== "org_admin") {
-      throw new Error("Only administrators can create organizations");
+    if (profile.role !== "org_admin" && profile.role !== "super_admin") {
+      throw new Error("Only administrators can create organization requests");
     }
 
     const existing = await ctx.db
@@ -36,26 +35,80 @@ export const createOrganization = mutation({
       description: args.description,
       website: args.website,
       isActive: true,
+      status: "pending",
       createdBy: profile._id,
       createdAt: Date.now(),
     });
 
-    // Add creator as org_admin member
+    // Add creator as org_admin member (pending until org is approved)
     await ctx.db.insert("orgMembers", {
       orgId,
       userId: profile._id,
       role: "org_admin",
       isActive: true,
       joinedAt: Date.now(),
+      status: "approved", // org_admin is auto-approved within their org
     });
 
     await ctx.db.patch(profile._id, { selectedOrgId: orgId });
+
+    // Notify super admins
+    const superAdmins = await ctx.db
+      .query("appUsers")
+      .withIndex("by_role", (q) => q.eq("role", "super_admin"))
+      .collect();
+    for (const sa of superAdmins) {
+      await ctx.db.insert("notifications", {
+        userId: sa._id,
+        title: "New Organization Request",
+        message: `"${args.name}" has requested to join LearnSphere. Review and approve.`,
+        type: "system",
+        isRead: false,
+        link: "/dashboard/organizations",
+        createdAt: Date.now(),
+      });
+    }
+
     return orgId;
   },
 });
 
+// ─── APPROVE ORG ──────────────────────────────────────────────
+// Only super_admin can approve
+export const approveOrganization = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    approved: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const sa = await requireSuperAdmin(ctx);
+
+    const org = await ctx.db.get(args.orgId);
+    if (!org) throw new Error("Organization not found");
+
+    await ctx.db.patch(args.orgId, {
+      status: args.approved ? "approved" : "rejected",
+      isActive: args.approved,
+    });
+
+    // Notify org creator
+    await ctx.db.insert("notifications", {
+      userId: org.createdBy,
+      title: args.approved ? "Organization Approved!" : "Organization Rejected",
+      message: args.approved
+        ? `"${org.name}" has been approved and is now live.`
+        : `"${org.name}" was not approved. Please review and resubmit.`,
+      type: "system",
+      isRead: false,
+      link: "/dashboard/organizations",
+      createdAt: Date.now(),
+    });
+
+    return args.orgId;
+  },
+});
+
 // ─── UPDATE ORG ───────────────────────────────────────────────
-// Only org_admin or super_admin of the org
 export const updateOrganization = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -76,12 +129,56 @@ export const updateOrganization = mutation({
   },
 });
 
+// ─── DELETE ORG ───────────────────────────────────────────────
+export const deleteOrganization = mutation({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    const sa = await requireSuperAdmin(ctx);
+
+    const org = await ctx.db.get(args.orgId);
+    if (!org) throw new Error("Organization not found");
+
+    // Remove all members
+    const members = await ctx.db
+      .query("orgMembers")
+      .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
+      .collect();
+    for (const m of members) await ctx.db.delete(m._id);
+
+    await ctx.db.delete(args.orgId);
+    return args.orgId;
+  },
+});
+
 // ─── QUERIES ──────────────────────────────────────────────────
 
+// All orgs — super admin only
 export const getAllOrganizations = query({
   args: {},
   handler: async (ctx) => {
     return await ctx.db.query("organizations").collect();
+  },
+});
+
+// Approved orgs — public (for learners to browse courses)
+export const getApprovedOrganizations = query({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.db
+      .query("organizations")
+      .withIndex("by_status", (q) => q.eq("status", "approved"))
+      .collect();
+  },
+});
+
+// Pending orgs — super admin
+export const getPendingOrganizations = query({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.db
+      .query("organizations")
+      .withIndex("by_status", (q) => q.eq("status", "pending"))
+      .collect();
   },
 });
 
@@ -132,7 +229,6 @@ export const getOrgStats = query({
       .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
       .collect();
 
-    // Count certificates for this org
     let totalCertificates = 0;
     for (const m of members) {
       const certs = await ctx.db
@@ -142,8 +238,9 @@ export const getOrgStats = query({
       totalCertificates += certs.length;
     }
 
-    const instructors = members.filter((m) => m.role === "instructor").length;
+    const instructors = members.filter((m) => m.role === "instructor" && m.status === "approved").length;
     const learners = members.filter((m) => m.role === "learner").length;
+    const pendingApplications = members.filter((m) => m.role === "instructor" && m.status === "pending").length;
     const publishedCourses = courses.filter((c) => c.isPublished).length;
     const completedEnrollments = enrollments.filter((e) => e.isCompleted).length;
     const completionRate =
@@ -161,6 +258,7 @@ export const getOrgStats = query({
       completedEnrollments,
       completionRate,
       totalCertificates,
+      pendingApplications,
     };
   },
 });

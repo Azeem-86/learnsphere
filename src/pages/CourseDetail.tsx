@@ -11,18 +11,19 @@ import { toast } from "sonner";
 import {
   BookOpen,
   Users,
-  Play,
   FileText,
   Video,
   CheckCircle2,
   Circle,
-  Clock,
   GraduationCap,
   ArrowLeft,
   ClipboardCheck,
   Award,
   ChevronDown,
   ChevronRight,
+  Lock,
+  Building2,
+  Clock,
 } from "lucide-react";
 
 const lessonTypeIcons: Record<string, any> = {
@@ -55,6 +56,7 @@ export default function CourseDetail() {
 
   const isLearner = profile?.role === "learner";
   const isInstructor = profile?.role === "instructor" || profile?.role === "org_admin";
+  const canSeeContent = !isLearner || !!enrollment;
 
   const completedLessonIds = new Set(
     lessonProgress?.filter((p: any) => p.isCompleted).map((p: any) => p.lessonId) ?? []
@@ -77,6 +79,7 @@ export default function CourseDetail() {
     if (!courseId) return;
     try {
       await enroll({ courseId: courseId as any });
+      toast.success("Enrolled! You now have full access to course content.");
     } catch (err: any) {
       toast.error(err.message || "Failed to enroll");
     }
@@ -98,7 +101,6 @@ export default function CourseDetail() {
   return (
     <AppLayout>
       <div className="space-y-6 max-w-4xl">
-        {/* Back */}
         <Button variant="ghost" size="sm" onClick={() => navigate(-1)} className="clay-sm rounded-xl w-fit">
           <ArrowLeft className="mr-1 h-4 w-4" /> Back
         </Button>
@@ -111,7 +113,7 @@ export default function CourseDetail() {
             </Badge>
             {isInstructor && (
               <Button asChild variant="ghost" size="sm" className="clay-sm rounded-xl">
-                <Link to={`/dashboard/course-builder?course=${courseId}`}>Edit Course</Link>
+                <Link to="/dashboard/course-builder">Edit Course</Link>
               </Button>
             )}
           </div>
@@ -119,9 +121,14 @@ export default function CourseDetail() {
           {course.description && (
             <p className="text-muted-foreground mb-4">{course.description}</p>
           )}
-          <div className="flex items-center gap-4 text-sm text-muted-foreground">
+          <div className="flex items-center gap-4 text-sm text-muted-foreground flex-wrap">
             {course.instructor && (
-              <span>Instructor: <strong className="text-foreground">{course.instructor.name}</strong></span>
+              <span>👨‍🏫 {course.instructor.name}</span>
+            )}
+            {course.org && (
+              <span className="flex items-center gap-1">
+                <Building2 className="h-3 w-3" /> {course.org.name}
+              </span>
             )}
             <span>{totalLessons} lessons</span>
             <span>{course.enrollmentCount} enrolled</span>
@@ -153,25 +160,37 @@ export default function CourseDetail() {
               </div>
             ) : (
               <div className="text-center">
-                <GraduationCap className="h-8 w-8 text-muted-foreground mx-auto mb-3" />
-                <p className="text-muted-foreground mb-3">Not enrolled yet</p>
+                <Lock className="h-8 w-8 text-muted-foreground mx-auto mb-3" />
+                <p className="text-muted-foreground mb-3">
+                  Enroll in this course to access all content, quizzes, and assignments.
+                </p>
                 <Button className="clay-btn text-white" onClick={handleEnroll}>
-                  Enroll in This Course
+                  <GraduationCap className="mr-2 h-4 w-4" /> Enroll in This Course
                 </Button>
               </div>
             )}
           </div>
         )}
 
-        {/* Modules */}
+        {/* Modules — content hidden from unenrolled learners */}
         <div className="space-y-3">
-          <h3 className="text-lg font-bold">Course Content</h3>
+          <h3 className="text-lg font-bold">
+            {canSeeContent ? "Course Content" : "Course Outline"}
+          </h3>
+          {!canSeeContent && isLearner && (
+            <div className="clay-inset p-3 rounded-xl flex items-center gap-2">
+              <Lock className="h-4 w-4 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">
+                Enroll to see lesson details and access content.
+              </p>
+            </div>
+          )}
           {course.modules?.map((mod: any, idx: number) => {
-            const isExpanded = expandedModules.has(mod._id) || idx === 0;
+            const isExpanded = canSeeContent && (expandedModules.has(mod._id) || idx === 0);
             return (
               <div key={mod._id} className="clay-card overflow-hidden">
                 <button
-                  onClick={() => toggleModule(mod._id)}
+                  onClick={() => canSeeContent && toggleModule(mod._id)}
                   className="flex items-center justify-between w-full p-4 text-left"
                 >
                   <div className="flex items-center gap-3">
@@ -183,21 +202,21 @@ export default function CourseDetail() {
                       )}
                     </div>
                   </div>
-                  {isExpanded ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+                  {canSeeContent ? (
+                    isExpanded ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                  ) : (
+                    <Lock className="h-4 w-4 text-muted-foreground" />
+                  )}
                 </button>
-                {isExpanded && (
+                {isExpanded && mod.lessons && (
                   <div className="border-t border-border/50 px-4 pb-3">
-                    {mod.lessons?.map((lesson: any, lIdx: number) => {
+                    {mod.lessons.map((lesson: any) => {
                       const isComplete = completedLessonIds.has(lesson._id);
-                      const isClickable = enrollment || !isLearner;
                       return (
                         <button
                           key={lesson._id}
-                          onClick={() => isClickable && navigate(`/dashboard/lesson/${lesson._id}`)}
-                          disabled={!isClickable}
-                          className={`flex items-center gap-3 w-full p-3 rounded-xl text-left transition-all ${
-                            isClickable ? "hover:bg-white/50 cursor-pointer" : "opacity-60 cursor-not-allowed"
-                          }`}
+                          onClick={() => navigate(`/dashboard/lesson/${lesson._id}`)}
+                          className="flex items-center gap-3 w-full p-3 rounded-xl text-left transition-all hover:bg-white/50 cursor-pointer"
                         >
                           <span className="flex-shrink-0">
                             {isComplete ? (

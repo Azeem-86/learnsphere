@@ -1,21 +1,19 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import {
-  requireProfile,
   requireCourseAccess,
-  requireOrgMember,
   requireInstructorOrAdmin,
   getProfile,
 } from "./helpers";
 
 // ─── CREATE COURSE ────────────────────────────────────────────
-// Only instructor or org_admin in the org
 export const createCourse = mutation({
   args: {
     orgId: v.id("organizations"),
     title: v.string(),
     description: v.optional(v.string()),
     passingGrade: v.number(),
+    durationMinutes: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const profile = await requireInstructorOrAdmin(ctx, args.orgId);
@@ -27,6 +25,7 @@ export const createCourse = mutation({
       instructorId: profile._id,
       isPublished: false,
       passingGrade: args.passingGrade,
+      durationMinutes: args.durationMinutes,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     });
@@ -36,13 +35,13 @@ export const createCourse = mutation({
 });
 
 // ─── UPDATE COURSE ────────────────────────────────────────────
-// Instructor can edit own courses; org_admin can edit any in their org
 export const updateCourse = mutation({
   args: {
     courseId: v.id("courses"),
     title: v.optional(v.string()),
     description: v.optional(v.string()),
     passingGrade: v.optional(v.number()),
+    durationMinutes: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     await requireCourseAccess(ctx, args.courseId);
@@ -51,6 +50,7 @@ export const updateCourse = mutation({
     if (args.title !== undefined) updates.title = args.title;
     if (args.description !== undefined) updates.description = args.description;
     if (args.passingGrade !== undefined) updates.passingGrade = args.passingGrade;
+    if (args.durationMinutes !== undefined) updates.durationMinutes = args.durationMinutes;
 
     await ctx.db.patch(args.courseId, updates);
     return args.courseId;
@@ -58,7 +58,6 @@ export const updateCourse = mutation({
 });
 
 // ─── PUBLISH / UNPUBLISH ──────────────────────────────────────
-// Instructor (own courses) or org_admin
 export const publishCourse = mutation({
   args: {
     courseId: v.id("courses"),
@@ -76,7 +75,6 @@ export const publishCourse = mutation({
 });
 
 // ─── DELETE COURSE ────────────────────────────────────────────
-// Instructor (own) or org_admin only
 export const deleteCourse = mutation({
   args: { courseId: v.id("courses") },
   handler: async (ctx, args) => {
@@ -108,7 +106,8 @@ export const deleteCourse = mutation({
   },
 });
 
-// ─── CREATE MODULE ────────────────────────────────────────────
+// ─── MODULES & LESSONS CRUD ───────────────────────────────────
+
 export const createModule = mutation({
   args: {
     courseId: v.id("courses"),
@@ -133,7 +132,6 @@ export const createModule = mutation({
   },
 });
 
-// ─── UPDATE MODULE ────────────────────────────────────────────
 export const updateModule = mutation({
   args: {
     moduleId: v.id("modules"),
@@ -155,7 +153,6 @@ export const updateModule = mutation({
   },
 });
 
-// ─── DELETE MODULE ────────────────────────────────────────────
 export const deleteModule = mutation({
   args: { moduleId: v.id("modules") },
   handler: async (ctx, args) => {
@@ -173,7 +170,6 @@ export const deleteModule = mutation({
   },
 });
 
-// ─── CREATE LESSON ────────────────────────────────────────────
 export const createLesson = mutation({
   args: {
     moduleId: v.id("modules"),
@@ -216,7 +212,6 @@ export const createLesson = mutation({
   },
 });
 
-// ─── UPDATE LESSON ────────────────────────────────────────────
 export const updateLesson = mutation({
   args: {
     lessonId: v.id("lessons"),
@@ -242,7 +237,6 @@ export const updateLesson = mutation({
   },
 });
 
-// ─── DELETE LESSON ────────────────────────────────────────────
 export const deleteLesson = mutation({
   args: { lessonId: v.id("lessons") },
   handler: async (ctx, args) => {
@@ -254,24 +248,14 @@ export const deleteLesson = mutation({
   },
 });
 
-// ─── QUERIES (read-only, any member of the org can view) ─────
+// ─── QUERIES ──────────────────────────────────────────────────
 
+// Courses within an org (for org members: instructors, admin)
 export const getCourses = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
-    // Any member of the org can see courses
     const profile = await getProfile(ctx);
     if (!profile) return [];
-
-    if (profile.role !== "super_admin") {
-      const member = await ctx.db
-        .query("orgMembers")
-        .withIndex("by_orgAndUser", (q) =>
-          q.eq("orgId", args.orgId).eq("userId", profile._id)
-        )
-        .unique();
-      if (!member) return [];
-    }
 
     const courses = await ctx.db
       .query("courses")
@@ -303,6 +287,59 @@ export const getCourses = query({
   },
 });
 
+// All published courses from approved orgs (for learner browsing)
+export const getPublishedCoursesForLearners = query({
+  args: {},
+  handler: async (ctx) => {
+    // Get approved orgs
+    const approvedOrgs = await ctx.db
+      .query("organizations")
+      .withIndex("by_status", (q) => q.eq("status", "approved"))
+      .collect();
+    const approvedOrgIds = new Set(approvedOrgs.map((o) => o._id));
+
+    const allCourses = await ctx.db.query("courses").collect();
+    const publishedCourses = allCourses.filter(
+      (c) => c.isPublished && approvedOrgIds.has(c.orgId)
+    );
+
+    const enriched = await Promise.all(
+      publishedCourses.map(async (course) => {
+        const instructor = await ctx.db.get(course.instructorId);
+        const org = await ctx.db.get(course.orgId);
+        const modules = await ctx.db
+          .query("modules")
+          .withIndex("by_courseId", (q) => q.eq("courseId", course._id))
+          .collect();
+
+        // Get module titles for the card
+        const moduleTitles = modules
+          .sort((a, b) => a.order - b.order)
+          .map((m) => m.title);
+
+        const enrollments = await ctx.db
+          .query("enrollments")
+          .withIndex("by_courseId", (q) => q.eq("courseId", course._id))
+          .collect();
+
+        return {
+          ...course,
+          instructorName: instructor?.name ?? "Unknown",
+          orgName: org?.name ?? "Unknown",
+          orgSlug: org?.slug ?? "",
+          moduleCount: modules.length,
+          moduleTitles,
+          enrollmentCount: enrollments.length,
+          totalLessons: modules.length, // approximation, can be refined
+        };
+      })
+    );
+
+    return enriched;
+  },
+});
+
+// Get a course's modules and lessons (for enrolled learners and instructors)
 export const getCourse = query({
   args: { courseId: v.id("courses") },
   handler: async (ctx, args) => {
@@ -393,5 +430,39 @@ export const getLesson = query({
     }
 
     return { ...lesson, module: module_, course, quiz, assignment };
+  },
+});
+
+// Instructor's own courses across all their orgs
+export const getMyInstructorCourses = query({
+  args: {},
+  handler: async (ctx) => {
+    const profile = await getProfile(ctx);
+    if (!profile || profile.role !== "instructor") return [];
+
+    const courses = await ctx.db
+      .query("courses")
+      .withIndex("by_instructorId", (q) => q.eq("instructorId", profile._id))
+      .collect();
+
+    return await Promise.all(
+      courses.map(async (course) => {
+        const org = await ctx.db.get(course.orgId);
+        const modules = await ctx.db
+          .query("modules")
+          .withIndex("by_courseId", (q) => q.eq("courseId", course._id))
+          .collect();
+        const enrollments = await ctx.db
+          .query("enrollments")
+          .withIndex("by_courseId", (q) => q.eq("courseId", course._id))
+          .collect();
+        return {
+          ...course,
+          org,
+          moduleCount: modules.length,
+          enrollmentCount: enrollments.length,
+        };
+      })
+    );
   },
 });

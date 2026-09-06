@@ -30,6 +30,13 @@ const schema = defineSchema(
       avatar: v.optional(v.string()),
       isActive: v.boolean(),
       createdAt: v.number(),
+      // Profile details
+      bio: v.optional(v.string()),
+      phone: v.optional(v.string()),
+      institution: v.optional(v.string()),
+      qualifications: v.optional(v.string()),
+      dateOfBirth: v.optional(v.string()),
+      address: v.optional(v.string()),
     })
       .index("by_userId", ["userId"])
       .index("by_email", ["email"])
@@ -42,11 +49,18 @@ const schema = defineSchema(
       logo: v.optional(v.string()),
       website: v.optional(v.string()),
       isActive: v.boolean(),
+      // NEW: approval status — only super_admin can approve
+      status: v.union(
+        v.literal("pending"),
+        v.literal("approved"),
+        v.literal("rejected")
+      ),
       createdBy: v.id("appUsers"),
       createdAt: v.number(),
     })
       .index("by_slug", ["slug"])
-      .index("by_createdBy", ["createdBy"]),
+      .index("by_createdBy", ["createdBy"])
+      .index("by_status", ["status"]),
 
     orgMembers: defineTable({
       orgId: v.id("organizations"),
@@ -58,10 +72,23 @@ const schema = defineSchema(
       ),
       isActive: v.boolean(),
       joinedAt: v.number(),
+      // NEW: application/approval status for instructors
+      status: v.union(
+        v.literal("pending"),
+        v.literal("approved"),
+        v.literal("rejected")
+      ),
+      // Who invited or approved
+      invitedBy: v.optional(v.id("appUsers")),
+      approvedBy: v.optional(v.id("appUsers")),
+      // Instructor application details
+      applicationMessage: v.optional(v.string()),
+      applicationDate: v.optional(v.number()),
     })
       .index("by_orgId", ["orgId"])
       .index("by_userId", ["userId"])
-      .index("by_orgAndUser", ["orgId", "userId"]),
+      .index("by_orgAndUser", ["orgId", "userId"])
+      .index("by_status", ["status"]),
 
     courses: defineTable({
       orgId: v.id("organizations"),
@@ -70,7 +97,9 @@ const schema = defineSchema(
       thumbnail: v.optional(v.string()),
       instructorId: v.id("appUsers"),
       isPublished: v.boolean(),
-      passingGrade: v.number(), // percentage 0-100
+      passingGrade: v.number(),
+      // Estimated duration in minutes
+      durationMinutes: v.optional(v.number()),
       createdAt: v.number(),
       updatedAt: v.number(),
     })
@@ -140,7 +169,7 @@ const schema = defineSchema(
       title: v.string(),
       description: v.optional(v.string()),
       passingScore: v.number(),
-      timeLimit: v.optional(v.number()), // in minutes
+      timeLimit: v.optional(v.number()),
       createdAt: v.number(),
     })
       .index("by_lessonId", ["lessonId"])
@@ -151,7 +180,7 @@ const schema = defineSchema(
       text: v.string(),
       type: v.union(v.literal("multiple_choice")),
       options: v.array(v.string()),
-      correctAnswer: v.number(), // index of correct option
+      correctAnswer: v.number(),
       order: v.number(),
     })
       .index("by_quizId", ["quizId"]),
@@ -166,7 +195,7 @@ const schema = defineSchema(
           selectedAnswer: v.number(),
         })
       ),
-      score: v.number(), // percentage 0-100
+      score: v.number(),
       passed: v.boolean(),
       startedAt: v.number(),
       completedAt: v.number(),

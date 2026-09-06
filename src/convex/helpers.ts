@@ -13,6 +13,12 @@ export type AppUser = {
   selectedOrgId?: Id<"organizations">;
   isActive: boolean;
   createdAt: number;
+  bio?: string;
+  phone?: string;
+  institution?: string;
+  qualifications?: string;
+  dateOfBirth?: string;
+  address?: string;
 };
 
 /** Get the current app profile. Returns null if not signed in or no profile exists. */
@@ -45,14 +51,16 @@ export async function requireRole(
   return profile;
 }
 
-/** Require the user to be a member of the given org (or super_admin). */
+/**
+ * Require the user to be an APPROVED member of the given org.
+ * Super admins are NOT automatically granted access — they must be actual members.
+ */
 export async function requireOrgMember(
   ctx: MutationCtx | QueryCtx,
   orgId: Id<"organizations">
 ): Promise<AppUser> {
   const profile = await getProfile(ctx);
   if (!profile) throw new Error("Authentication required");
-  if (profile.role === "super_admin") return profile;
 
   const member = await ctx.db
     .query("orgMembers")
@@ -63,17 +71,22 @@ export async function requireOrgMember(
 
   if (!member) throw new Error("Not a member of this organization");
   if (!member.isActive) throw new Error("Your membership is inactive");
+  if (member.status !== "approved") throw new Error("Your membership is pending approval");
   return profile;
 }
 
-/** Require org_admin or super_admin for the given org. */
+/**
+ * Require org_admin for the given org.
+ * Super admins are NOT automatically org admins — they manage orgs through the approval system.
+ */
 export async function requireOrgAdmin(
   ctx: MutationCtx,
   orgId: Id<"organizations">
 ): Promise<AppUser> {
   const profile = await requireProfile(ctx);
-  if (profile.role === "super_admin") return profile;
-  if (profile.role !== "org_admin") throw new Error("Organization admin required");
+  if (profile.role !== "org_admin") {
+    throw new Error("Organization admin role required");
+  }
 
   const member = await ctx.db
     .query("orgMembers")
@@ -84,10 +97,14 @@ export async function requireOrgAdmin(
 
   if (!member) throw new Error("Not a member of this organization");
   if (!member.isActive) throw new Error("Your membership is inactive");
+  if (member.status !== "approved") throw new Error("Your membership is pending approval");
   return profile;
 }
 
-/** Require instructor or org_admin for the given org. super_admin is NOT allowed. */
+/**
+ * Require instructor or org_admin for the given org.
+ * Super admins are NOT allowed — they don't create courses directly.
+ */
 export async function requireInstructorOrAdmin(
   ctx: MutationCtx,
   orgId: Id<"organizations">
@@ -106,10 +123,14 @@ export async function requireInstructorOrAdmin(
 
   if (!member) throw new Error("Not a member of this organization");
   if (!member.isActive) throw new Error("Your membership is inactive");
+  if (member.status !== "approved") throw new Error("Your membership is pending approval");
   return profile;
 }
 
-/** Verify the user owns or manages the course. Returns the course + org. */
+/**
+ * Verify the user owns or manages the course. Returns the course + org.
+ * Only instructors (own courses) and org_admins can modify courses.
+ */
 export async function requireCourseAccess(
   ctx: MutationCtx,
   courseId: Id<"courses">
@@ -135,6 +156,7 @@ export async function requireCourseAccess(
     .unique();
 
   if (!member || !member.isActive) throw new Error("Not authorized for this course");
+  if (member.status !== "approved") throw new Error("Your membership is pending approval");
 
   // Instructors can only edit their own courses; org_admin can edit any in their org
   if (profile.role === "instructor" && course.instructorId !== profile._id) {
@@ -146,4 +168,15 @@ export async function requireCourseAccess(
   }
 
   return { course, profile, member };
+}
+
+/**
+ * Super admin only — the authorizer of all.
+ */
+export async function requireSuperAdmin(ctx: MutationCtx): Promise<AppUser> {
+  const profile = await requireProfile(ctx);
+  if (profile.role !== "super_admin") {
+    throw new Error("Super admin role required");
+  }
+  return profile;
 }
